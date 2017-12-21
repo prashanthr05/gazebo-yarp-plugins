@@ -1270,7 +1270,8 @@ bool GazeboYarpControlBoardDriver::check_joint_within_limits_override_torque(int
 
     int   signKp = (positionPID.GetPGain()>0?1:-1);
     int   signRef = (ref>0?1:-1);
-    if (m_controlMode[i] == VOCAB_CM_TORQUE || m_interactionMode[i] == VOCAB_IM_COMPLIANT)
+    if (m_controlMode[i] == VOCAB_CM_TORQUE || m_interactionMode[i] == VOCAB_IM_COMPLIANT
+        || m_controlMode[i] == VOCAB_CM_PWM || m_controlMode[i] == VOCAB_CM_CURRENT )
     {
         if (m_controlMode[i] != VOCAB_CM_IDLE && m_controlMode[i] != VOCAB_CM_FORCE_IDLE)
         {
