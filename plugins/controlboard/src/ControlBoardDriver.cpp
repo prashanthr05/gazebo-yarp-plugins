@@ -61,7 +61,7 @@ bool GazeboYarpControlBoardDriver::gazebo_init()
     m_numberOfJoints = m_jointNames.size();
 
     m_positions.resize(m_numberOfJoints);
-    m_positionsDecoupled.resize(m_numberOfJoints);
+    m_mot_positions.resize(m_numberOfJoints);
     m_zeroPosition.resize(m_numberOfJoints);
     m_jntReferenceVelocities.resize(m_numberOfJoints);
     m_velocities.resize(m_numberOfJoints);
@@ -100,7 +100,7 @@ bool GazeboYarpControlBoardDriver::gazebo_init()
 
     // Initial zeroing of all vectors
     m_positions.zero();
-    m_positionsDecoupled.zero();
+    m_mot_positions.zero();
     m_zeroPosition.zero();
     m_velocities.zero();
     m_motReferencePositions.zero();
@@ -460,7 +460,7 @@ void GazeboYarpControlBoardDriver::onUpdate(const gazebo::common::UpdateInfo& _i
         m_torques[jnt_cnt] = m_jointPointers[jnt_cnt]->GetForce(0u);
     }
 
-    m_positionsDecoupled=m_positions;
+    m_mot_positions=m_positions;
     //measurements decoupling
     for (size_t cpl_cnt = 0; cpl_cnt < m_coupling_handler.size(); cpl_cnt++)
     {
@@ -552,7 +552,7 @@ void GazeboYarpControlBoardDriver::onUpdate(const gazebo::common::UpdateInfo& _i
         if ((m_controlMode[j] == VOCAB_CM_POSITION || m_controlMode[j] == VOCAB_CM_POSITION_DIRECT) && (m_interactionMode[j] == VOCAB_IM_STIFF))
         {
             gazebo::common::PID &pid = m_pids[VOCAB_PIDTYPE_POSITION][j];
-            forceReference = pid.Update(convertUserToGazebo(j, m_positionsDecoupled[j]) - convertUserToGazebo(j, m_motReferencePositions[j]), stepTime);
+            forceReference = pid.Update(convertUserToGazebo(j, m_mot_positions[j]) - convertUserToGazebo(j, m_motReferencePositions[j]), stepTime);
         }
         else if ((m_controlMode[j] == VOCAB_CM_POSITION || m_controlMode[j] == VOCAB_CM_POSITION_DIRECT) && (m_interactionMode[j] == VOCAB_IM_COMPLIANT))
         {
@@ -1270,36 +1270,38 @@ bool GazeboYarpControlBoardDriver::check_joint_within_limits_override_torque(int
 
     int   signKp = (positionPID.GetPGain()>0?1:-1);
     int   signRef = (ref>0?1:-1);
-    //if (m_controlMode[i] == VOCAB_CM_TORQUE || m_interactionMode[i] == VOCAB_IM_COMPLIANT)
-    if (m_controlMode[i] != VOCAB_CM_IDLE && m_controlMode[i] != VOCAB_CM_FORCE_IDLE)
+    if (m_controlMode[i] == VOCAB_CM_TORQUE || m_interactionMode[i] == VOCAB_IM_COMPLIANT)
     {
-        if (m_positionsDecoupled[i] > m_jointPosLimits[i].max)
+        if (m_controlMode[i] != VOCAB_CM_IDLE && m_controlMode[i] != VOCAB_CM_FORCE_IDLE)
         {
-            if (signKp*signRef >0 )
+            if (m_positions[i] > m_jointPosLimits[i].max)
             {
-                ref = ( (m_jointPosLimits[i].max-m_positionsDecoupled[i]) * (positionPID.GetPGain()));
-                if (ref > positionPID.GetCmdMax()) ref = positionPID.GetCmdMax();
-                else if (ref < positionPID.GetCmdMin()) ref = positionPID.GetCmdMin();
-                //_integral[i] = 0;
-#ifdef DEBUG_LIMITS
-                yDebug() << "TTT TMAX" << m_positionsDecoupled[i] <<">" <<  m_jointPosLimits[i].max;
-#endif
+                if (signKp*signRef >0 )
+                {
+                    ref = ( (m_jointPosLimits[i].max-m_positions[i]) * (positionPID.GetPGain()));
+                    if (ref > positionPID.GetCmdMax()) ref = positionPID.GetCmdMax();
+                    else if (ref < positionPID.GetCmdMin()) ref = positionPID.GetCmdMin();
+                    //_integral[i] = 0;
+    #ifdef DEBUG_LIMITS
+                    yDebug() << "TTT TMAX" << m_positions[i] <<">" <<  m_jointPosLimits[i].max;
+    #endif
+                }
+                return false;
             }
-            return false;
-        }
-        else if (m_positionsDecoupled[i] < m_jointPosLimits[i].min)
-        {
-            if (signKp*signRef <0 )
+            else if (m_positions[i] < m_jointPosLimits[i].min)
             {
-                ref = ( (m_jointPosLimits[i].min-m_positionsDecoupled[i]) * (positionPID.GetPGain()));
-                if (ref > positionPID.GetCmdMax()) ref = positionPID.GetCmdMax();
-                else if (ref < positionPID.GetCmdMin()) ref = positionPID.GetCmdMin();
-                //_integral[i] = 0;
-#ifdef DEBUG_LIMITS
-                yDebug() << "TTT TMIN" << m_positionsDecoupled[i] <<"<" <<  m_jointPosLimits[i].min;
-#endif
+                if (signKp*signRef <0 )
+                {
+                    ref = ( (m_jointPosLimits[i].min-m_positions[i]) * (positionPID.GetPGain()));
+                    if (ref > positionPID.GetCmdMax()) ref = positionPID.GetCmdMax();
+                    else if (ref < positionPID.GetCmdMin()) ref = positionPID.GetCmdMin();
+                    //_integral[i] = 0;
+    #ifdef DEBUG_LIMITS
+                    yDebug() << "TTT TMIN" << m_positions[i] <<"<" <<  m_jointPosLimits[i].min;
+    #endif
+                }
+                return false;
             }
-            return false;
         }
     }
     return true;
