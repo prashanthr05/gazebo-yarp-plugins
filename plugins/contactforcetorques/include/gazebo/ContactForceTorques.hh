@@ -126,11 +126,12 @@ namespace gazebo
         struct AdditionalFrameInformation;
         struct OutputWrenchPortInformation;
         struct ForceTorque;
-
+        struct ContactStatePortInformation;
+        
         /**
          * Load and validate parameters.
          */
-        bool LoadParams(physics::ModelPtr model);
+        bool LoadParams(physics::ModelPtr model, sdf::ElementPtr _sdf);
 
         /**
          * Load and validate parameters related to additional frames.
@@ -141,6 +142,11 @@ namespace gazebo
          * Load and validate parameters related to streaming ports.
          */
         bool LoadStreamingPortParams(physics::ModelPtr model);
+        
+        /**
+         * Load  and validate parameters related to contact state streaming ports
+         */
+        bool LoadContactPortStreamingParams(physics::ModelPtr model, sdf::ElementPtr _sdf);         
 
         /**
          * Open YARP ports.
@@ -168,6 +174,8 @@ namespace gazebo
          * Get total force that the enviroment applies on a link, expressed in the link frame (both origin and orientation)
          */
         GazeboYarpContactForceTorques::ForceTorque getTotalForceTorqueAppliedOnLink(gazebo::physics::LinkPtr link);
+        
+        int inferLinkFullContact(gazebo::physics::LinkPtr link, const int& max_contacts);
 
         std::unique_ptr<Pimpl> m_pimpl;
     };

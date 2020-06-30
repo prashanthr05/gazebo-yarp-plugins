@@ -56,7 +56,7 @@ struct GazeboYarpContactForceTorques::OutputWrenchPortInformation
     int origin_frame_index{0};
     yarp::sig::Vector output_vector;
     ignition::math::Pose3d publishingFrame_H_linkFrame;
-    yarp::os::BufferedPort<yarp::sig::Vector>* output_port;
+    yarp::os::BufferedPort<yarp::sig::Vector>* output_port;    
 
     OutputWrenchPortInformation(): output_port(new yarp::os::BufferedPort<yarp::sig::Vector>())
     {
@@ -71,6 +71,24 @@ struct GazeboYarpContactForceTorques::OutputWrenchPortInformation
     }
 };
 
+struct GazeboYarpContactForceTorques::ContactStatePortInformation
+{
+    std::string port_name{""};
+    std::string link_name{""};
+    gazebo::physics::LinkPtr link;
+    int link_index{0};
+    int sdf_max_contacts{0};
+    yarp::os::Port contact_state_port;
+    ContactStatePortInformation(): contact_state_port(yarp::os::Port())
+    {
+    }
+
+    ~ContactStatePortInformation()
+    {        
+
+    }
+};
+
 struct GazeboYarpContactForceTorques::Pimpl
 {
     double publishingPeriodInSeconds {-1.0};
@@ -82,6 +100,8 @@ struct GazeboYarpContactForceTorques::Pimpl
     gazebo::event::ConnectionPtr resetConnection;
     std::vector<  GazeboYarpContactForceTorques::AdditionalFrameInformation > additionalFrameInfos;
     std::vector<  GazeboYarpContactForceTorques::OutputWrenchPortInformation > outputFTPorts;
+    std::vector<  GazeboYarpContactForceTorques::ContactStatePortInformation > contactStatePorts;
+    bool stream_contact_states{false};
 };
 
 GazeboYarpContactForceTorques::GazeboYarpContactForceTorques() : ModelPlugin(), m_pimpl(new GazeboYarpContactForceTorques::Pimpl())
@@ -127,7 +147,7 @@ void GazeboYarpContactForceTorques::Load(physics::ModelPtr _parent, sdf::Element
     }
 
     // Try to parse and load parameters
-    bool okLoadParams = this->LoadParams(_parent);
+    bool okLoadParams = this->LoadParams(_parent, _sdf);
 
     if (!okLoadParams) {
         yError() << "GazeboYarpContactForceTorques : File .ini malformed, load of the plugin  failed." ;
@@ -333,7 +353,84 @@ bool GazeboYarpContactForceTorques::LoadStreamingPortParams(physics::ModelPtr mo
     return true;
 }
 
-bool GazeboYarpContactForceTorques::LoadParams(physics::ModelPtr model)
+bool GazeboYarpContactForceTorques::LoadContactPortStreamingParams(physics::ModelPtr model, sdf::ElementPtr _sdf)
+{
+    yarp::os::Bottle portsProp = m_pimpl->config.findGroup("RIGID_CONTACT_STATE_PORTS");
+    if (portsProp.isNull())
+    {
+        yWarning() << "GazeboYarpContactForceTorques: [RIGID_CONTACT_STATE_PORTS] group not found in config file. No ports for contact states will be open.";
+        m_pimpl->stream_contact_states = false;
+        return true;
+    }
+
+    m_pimpl->stream_contact_states = true;
+    // Load values    
+    m_pimpl->contactStatePorts.clear();
+    m_pimpl->contactStatePorts.resize(portsProp.size()-1);
+    for(size_t contact_state_port = 1; contact_state_port < portsProp.size(); contact_state_port++)
+    {
+        GazeboYarpContactForceTorques::ContactStatePortInformation& contact_port_struct = m_pimpl->contactStatePorts[contact_state_port-1];
+
+        yarp::os::Bottle *contact_port = portsProp.get(contact_state_port).asList();
+
+        if( contact_port == NULL || contact_port->isNull() || contact_port->size() != 2
+                || !contact_port->get(1).isString() ) 
+        {
+            yError() << "GazeboYarpContactForceTorques plugin failed: malformed RIGID_CONTACT_STATE_PORTS group found in configuration, exiting";
+            if( contact_port )
+            {
+                yError() << "GazeboYarpContactForceTorques plugin failed: malformed line " << contact_port->toString();
+            }
+            else
+            {
+                yError() << "GazeboYarpContactForceTorques plugin failed: malformed line " << portsProp.get(contact_state_port).toString();
+                yError() << "GazeboYarpContactForceTorques plugin failed: malformed group " << portsProp.toString();
+            }
+            return false;
+        }
+
+        contact_port_struct.port_name = contact_port->get(0).asString();
+        contact_port_struct.link_name = contact_port->get(1).asString();
+
+        // Get the exact link with only link name instead of full_scoped_link_name
+        physics::Link_V links = model->GetLinks();
+        size_t lnk=0;
+        for(lnk=0; lnk < links.size(); lnk++)
+        {
+            std::string candidate_link_name = links[lnk]->GetScopedName();
+
+            // hasEnding compare ending of the condidate model link name to the given link name, in order to be able to use unscoped names
+            if (GazeboYarpPlugins::hasEnding(candidate_link_name, contact_port_struct.link_name))
+            {
+                contact_port_struct.link = links[lnk];
+                break;
+            }
+        }
+
+        // If no link was found
+        if (lnk == links.size()) {
+            yError() << "GazeboYarpContactForceTorques plugin failed: link with name "
+                     << contact_port_struct.link_name << " not found in the model";
+            return false;
+        } 
+        
+        // if link was found, get the max contacts from SDF
+        sdf::ElementPtr collision_ptr = contact_port_struct.link->GetSDF().get()->GetElement("collision");
+        sdf::ElementPtr max_contact_ptr = collision_ptr.get()->GetElement("max_contacts");
+        if (max_contact_ptr == nullptr)
+        {
+            contact_port_struct.sdf_max_contacts = 0;
+        }
+        else
+        {
+            max_contact_ptr.get()->GetValue()->Get(contact_port_struct.sdf_max_contacts);
+        }
+    }
+
+    return true;
+}
+
+bool GazeboYarpContactForceTorques::LoadParams(physics::ModelPtr model, sdf::ElementPtr _sdf)
 {
     // First load periodInSeconds
     if (!m_pimpl->config.check("periodInSeconds")) {
@@ -357,6 +454,11 @@ bool GazeboYarpContactForceTorques::LoadParams(physics::ModelPtr model)
     if (!this->LoadStreamingPortParams(model)) {
         return false;
     }
+    
+    // load contact state port streaming
+    if (!this->LoadContactPortStreamingParams(model, _sdf)) {
+        return false;
+    }    
 
     return true;
 }
@@ -373,6 +475,18 @@ bool GazeboYarpContactForceTorques::openPorts()
         }
         m_pimpl->outputFTPorts[i].output_vector.resize(nrOfChannelsOfYARPFTSensor);
     }
+    
+    if (m_pimpl->stream_contact_states)
+    {
+        for (unsigned int i = 0; i < m_pimpl->contactStatePorts.size(); i++)
+        {
+            if (!m_pimpl->contactStatePorts[i].contact_state_port.open(m_pimpl->contactStatePorts[i].port_name)) {
+                yError() << "GazeboYarpContactForceTorques plugin failed: impossible to open port "
+                         << m_pimpl->contactStatePorts[i].port_name;
+                return false;
+            } 
+        }
+    }
     return true;
 }
 
@@ -381,6 +495,14 @@ bool GazeboYarpContactForceTorques::closePorts()
     for(unsigned int i = 0; i < m_pimpl->outputFTPorts.size(); i++ )
     {
         m_pimpl->outputFTPorts[i].output_port->close();
+    }
+    
+    if (m_pimpl->stream_contact_states)
+    {
+        for (unsigned int i = 0; i < m_pimpl->contactStatePorts.size(); i++)
+        {
+            m_pimpl->contactStatePorts[i].contact_state_port.close();
+        }
     }
     return true;
 }
@@ -455,6 +577,21 @@ GazeboYarpContactForceTorques::ForceTorque GazeboYarpContactForceTorques::getTot
     return applyTransformToForceTorque(linkFrame_H_linkCOM, ft_linkCOM);
 }
 
+int GazeboYarpContactForceTorques::inferLinkFullContact(gazebo::physics::LinkPtr link, const int& max_contacts)
+{
+    const std::vector< gazebo::physics::Contact* >& contacts = m_pimpl->contactManager->GetContacts();
+    for(auto&& contact : contacts) {
+        // Collision1 belongs to the link of interested
+        if (contact->collision1->GetLink()->GetId() == link->GetId() ) {            
+            if (contact->count == max_contacts)
+            {
+                return 1;
+            }            
+        }
+    }
+    return 0;
+}
+
 void GazeboYarpContactForceTorques::onUpdate(const gazebo::common::UpdateInfo& info)
 {
     // Get force torques from the contact manager and publish it on the port
@@ -484,6 +621,15 @@ void GazeboYarpContactForceTorques::onUpdate(const gazebo::common::UpdateInfo& i
         m_pimpl->outputFTPorts[i].output_port->write();
     }
 
+    for(size_t i=0; i < m_pimpl->contactStatePorts.size(); i++ )    
+    {
+        int contact = inferLinkFullContact(m_pimpl->contactStatePorts[i].link, m_pimpl->contactStatePorts[i].sdf_max_contacts);
+        yarp::os::Bottle contact_bottle;
+        contact_bottle.clear();
+        contact_bottle.addInt(contact);
+        m_pimpl->contactStatePorts[i].contact_state_port.write(contact_bottle);
+    }
+    
     m_pimpl->latestUpdateInstantInSeconds = info.simTime.Double();
     return;
 }
